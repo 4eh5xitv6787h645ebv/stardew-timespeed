@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Reflection;
 using cantorsdust.Common;
 using Microsoft.Xna.Framework.Input;
 using StardewModdingAPI;
@@ -90,6 +91,15 @@ internal class ModEntry : Mod
     /// <summary>Whether the player is in a time bubble that is actively suppressing time freeze.</summary>
     private bool IsInActiveTimeBubble => this.InTimeBubble && this.TimeBubbleWasTimeFrozen;
 
+    private const string ModDataKeyBubbleActive = "cantorsdust.TimeSpeed/TimeBubbleActive";
+    private const string ModDataKeyBubbleWasFrozen = "cantorsdust.TimeSpeed/TimeBubbleWasFrozen";
+    private const string ModDataKeySavedTime = "cantorsdust.TimeSpeed/TimeBubbleSavedTime";
+    private const string ModDataKeySavedInterval = "cantorsdust.TimeSpeed/TimeBubbleSavedInterval";
+
+    /// <summary>Whether bubble state was just restored from save data,
+    /// so OnDayStarted should skip its bubble reset.</summary>
+    private bool RestoredBubbleFromSave;
+
     /// <summary>Whether time should be frozen this tick. Set in UpdateTicking, used in UpdateTicked.</summary>
     private bool FreezeTimeThisTick;
 
@@ -158,6 +168,7 @@ internal class ModEntry : Mod
     private void OnGameLaunched(object? sender, GameLaunchedEventArgs e)
     {
         this.RegisterConfigMenu();
+        this.TryHookQuickSaveApi();
     }
 
     /// <inheritdoc cref="IGameLoopEvents.SaveLoaded"/>
@@ -175,11 +186,9 @@ internal class ModEntry : Mod
         this.SavedTimeOfDayBeforeCutscene = 0;
         this.SavedGameTimeIntervalBeforeCutscene = 0;
 
-        // reset time bubble state
-        this.InTimeBubble = false;
-        this.TimeBubbleWasTimeFrozen = false;
-        this.SavedTimeOfDayBeforeTimeBubble = 0;
-        this.SavedGameTimeIntervalBeforeTimeBubble = 0;
+        // restore time bubble state from save data
+        this.RestoreBubbleStateFromModData();
+        this.RestoredBubbleFromSave = this.InTimeBubble || this.TimeBubbleWasTimeFrozen;
     }
 
     /// <inheritdoc cref="IMultiplayerEvents.ModMessageReceived"/>
@@ -247,9 +256,14 @@ internal class ModEntry : Mod
         if (!this.ShouldEnable())
             return;
 
-        // reset time bubble state for new day
-        this.InTimeBubble = false;
-        this.TimeBubbleWasTimeFrozen = false;
+        // reset time bubble state for new day (skip if just restored from save)
+        if (this.RestoredBubbleFromSave)
+            this.RestoredBubbleFromSave = false;
+        else
+        {
+            this.InTimeBubble = false;
+            this.TimeBubbleWasTimeFrozen = false;
+        }
 
         this.UpdateScaleForDay(Game1.season, Game1.dayOfMonth);
         this.UpdateTimeFreeze(clearPreviousOverrides: true);
@@ -750,6 +764,7 @@ internal class ModEntry : Mod
             this.SavedGameTimeIntervalBeforeTimeBubble = Game1.gameTimeInterval;
         }
         this.InTimeBubble = true;
+        this.PersistBubbleStateToModData();
         this.Monitor.Log($"Entered time bubble '{location.Name}'. Time was {(this.TimeBubbleWasTimeFrozen ? "frozen" : "not frozen")}.", LogLevel.Trace);
     }
 
@@ -766,6 +781,7 @@ internal class ModEntry : Mod
         this.TimeBubbleWasTimeFrozen = false;
         this.SavedTimeOfDayBeforeTimeBubble = 0;
         this.SavedGameTimeIntervalBeforeTimeBubble = 0;
+        this.PersistBubbleStateToModData();
     }
 
     /// <summary>Deactivate the time bubble near pass-out so normal freeze mechanisms take over.
@@ -774,6 +790,88 @@ internal class ModEntry : Mod
     {
         this.Monitor.Log($"Time bubble deactivated (approaching pass-out at {Game1.timeOfDay}). Time will freeze until player leaves.", LogLevel.Trace);
         this.InTimeBubble = false;
+        this.PersistBubbleStateToModData();
+    }
+
+    /// <summary>Hook into the QuickSave mod's LoadedEvent via reflection so bubble state is restored after quickloads.</summary>
+    private void TryHookQuickSaveApi()
+    {
+        var api = this.Helper.ModRegistry.GetApi("DLX.QuickSave");
+        if (api == null)
+            return;
+
+        try
+        {
+            var loadedEvent = api.GetType().GetEvent("LoadedEvent");
+            if (loadedEvent == null)
+            {
+                this.Monitor.Log("QuickSave API found but LoadedEvent not available.", LogLevel.Debug);
+                return;
+            }
+
+            var handler = Delegate.CreateDelegate(
+                loadedEvent.EventHandlerType!,
+                this,
+                typeof(ModEntry).GetMethod(nameof(OnQuickSaveLoaded), BindingFlags.NonPublic | BindingFlags.Instance)!
+            );
+            loadedEvent.AddEventHandler(api, handler);
+            this.Monitor.Log("Hooked QuickSave LoadedEvent for time bubble persistence.", LogLevel.Trace);
+        }
+        catch (Exception ex)
+        {
+            this.Monitor.Log($"Failed to hook QuickSave API: {ex.Message}", LogLevel.Warn);
+        }
+    }
+
+    /// <summary>Called when QuickSave finishes loading a quicksave. Restores bubble state from modData.</summary>
+    /// <remarks>Signature matches QuickSave's LoadedDelegate(object, ILoadedEventArgs).
+    /// Parameters are typed as object for delegate contravariance compatibility.</remarks>
+    private void OnQuickSaveLoaded(object? sender, object args)
+    {
+        this.RestoreBubbleStateFromModData();
+        this.Monitor.Log("Restored time bubble state after QuickSave load.", LogLevel.Trace);
+    }
+
+    /// <summary>Write current bubble state to Game1.player.modData for save persistence.</summary>
+    private void PersistBubbleStateToModData()
+    {
+        if (this.InTimeBubble || this.TimeBubbleWasTimeFrozen)
+        {
+            var modData = Game1.player.modData;
+            modData[ModDataKeyBubbleActive] = this.InTimeBubble.ToString();
+            modData[ModDataKeyBubbleWasFrozen] = this.TimeBubbleWasTimeFrozen.ToString();
+            modData[ModDataKeySavedTime] = this.SavedTimeOfDayBeforeTimeBubble.ToString();
+            modData[ModDataKeySavedInterval] = this.SavedGameTimeIntervalBeforeTimeBubble.ToString();
+        }
+        else
+        {
+            var modData = Game1.player.modData;
+            modData.Remove(ModDataKeyBubbleActive);
+            modData.Remove(ModDataKeyBubbleWasFrozen);
+            modData.Remove(ModDataKeySavedTime);
+            modData.Remove(ModDataKeySavedInterval);
+        }
+    }
+
+    /// <summary>Read bubble state from Game1.player.modData after a save/quicksave load.</summary>
+    private void RestoreBubbleStateFromModData()
+    {
+        var modData = Game1.player.modData;
+        if (modData.TryGetValue(ModDataKeyBubbleActive, out string? activeStr))
+        {
+            this.InTimeBubble = bool.Parse(activeStr);
+            this.TimeBubbleWasTimeFrozen = modData.TryGetValue(ModDataKeyBubbleWasFrozen, out string? frozenStr) && bool.Parse(frozenStr);
+            this.SavedTimeOfDayBeforeTimeBubble = modData.TryGetValue(ModDataKeySavedTime, out string? timeStr) ? int.Parse(timeStr) : 0;
+            this.SavedGameTimeIntervalBeforeTimeBubble = modData.TryGetValue(ModDataKeySavedInterval, out string? intervalStr) ? int.Parse(intervalStr) : 0;
+            this.Monitor.Log($"Restored time bubble from save: inBubble={this.InTimeBubble}, wasFrozen={this.TimeBubbleWasTimeFrozen}, savedTime={this.SavedTimeOfDayBeforeTimeBubble}.", LogLevel.Trace);
+        }
+        else
+        {
+            this.InTimeBubble = false;
+            this.TimeBubbleWasTimeFrozen = false;
+            this.SavedTimeOfDayBeforeTimeBubble = 0;
+            this.SavedGameTimeIntervalBeforeTimeBubble = 0;
+        }
     }
 
     /// <summary>Send a multiplayer message to the host player.</summary>
