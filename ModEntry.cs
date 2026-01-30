@@ -68,6 +68,12 @@ internal class ModEntry : Mod
     /// <summary>The saved gameTimeInterval value from before the game update. Used to restore it after the update.</summary>
     private int SavedGameTimeInterval;
 
+    /// <summary>The saved Game1.timeOfDay when the cutscene chain started. Restored after the cutscene ends to prevent clock leakage.</summary>
+    private int SavedTimeOfDayBeforeCutscene;
+
+    /// <summary>The saved Game1.gameTimeInterval when the cutscene chain started. Restored after the cutscene ends to prevent clock leakage.</summary>
+    private int SavedGameTimeIntervalBeforeCutscene;
+
     /// <summary>Whether time should be frozen this tick. Set in UpdateTicking, used in UpdateTicked.</summary>
     private bool FreezeTimeThisTick;
 
@@ -150,6 +156,8 @@ internal class ModEntry : Mod
         this.InPostCutsceneDelay = false;
         this.InCutsceneUnfreeze = false;
         this.CutsceneHadEvent = false;
+        this.SavedTimeOfDayBeforeCutscene = 0;
+        this.SavedGameTimeIntervalBeforeCutscene = 0;
     }
 
     /// <inheritdoc cref="IMultiplayerEvents.ModMessageReceived"/>
@@ -309,7 +317,19 @@ internal class ModEntry : Mod
             // cutscene just started
             if (isInCutscene && !this.WasInCutscene)
             {
-                this.WasTimeFrozenBeforeCutscene = this.IsTimeFrozen;
+                // Only evaluate and save when not already tracking a cutscene chain.
+                // If InCutsceneUnfreeze is already true, a prior cutscene's snapshot
+                // is still active — keep it so the clock restores to the original
+                // pre-chain value even across consecutive cutscenes.
+                if (!this.InCutsceneUnfreeze)
+                {
+                    this.WasTimeFrozenBeforeCutscene = this.IsTimeFrozen;
+                    if (this.WasTimeFrozenBeforeCutscene)
+                    {
+                        this.SavedTimeOfDayBeforeCutscene = Game1.timeOfDay;
+                        this.SavedGameTimeIntervalBeforeCutscene = Game1.gameTimeInterval;
+                    }
+                }
                 this.InPostCutsceneDelay = false;
                 this.InCutsceneUnfreeze = true;
                 this.CutsceneHadEvent = false;
@@ -328,6 +348,7 @@ internal class ModEntry : Mod
                 else
                 {
                     // was just a screen fade (warp/transition), not a real event — restore immediately
+                    this.RestoreTimeAfterCutscene();
                     this.InPostCutsceneDelay = false;
                     this.InCutsceneUnfreeze = false;
                     this.Monitor.Log("Screen fade ended (no event detected). Restoring freeze state immediately.", LogLevel.Trace);
@@ -346,6 +367,7 @@ internal class ModEntry : Mod
             // check if post-cutscene delay has elapsed
             if (this.InPostCutsceneDelay && e.Ticks - this.CutsceneEndedAtTick >= PostCutsceneDelayTicks)
             {
+                this.RestoreTimeAfterCutscene();
                 this.InPostCutsceneDelay = false;
                 this.InCutsceneUnfreeze = false;
                 this.Monitor.Log($"Post-cutscene delay complete. Restoring time freeze state: {(this.WasTimeFrozenBeforeCutscene ? "frozen" : "not frozen")}.", LogLevel.Trace);
@@ -654,6 +676,17 @@ internal class ModEntry : Mod
         }
 
         return false;
+    }
+
+    /// <summary>Restore the game clock to its pre-cutscene state if time was frozen before the cutscene started.</summary>
+    private void RestoreTimeAfterCutscene()
+    {
+        if (this.WasTimeFrozenBeforeCutscene)
+        {
+            Game1.timeOfDay = this.SavedTimeOfDayBeforeCutscene;
+            Game1.gameTimeInterval = this.SavedGameTimeIntervalBeforeCutscene;
+            this.Monitor.Log($"Restored clock after cutscene: timeOfDay={Game1.timeOfDay}, interval={Game1.gameTimeInterval}.", LogLevel.Trace);
+        }
     }
 
     /// <summary>Send a multiplayer message to the host player.</summary>
