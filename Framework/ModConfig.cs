@@ -43,6 +43,13 @@ internal class ModConfig
         return this.FreezeTime.ShouldFreeze(location);
     }
 
+    /// <summary>Get whether the given location is a time bubble.</summary>
+    /// <param name="location">The game location.</param>
+    public bool IsTimeBubble(GameLocation? location)
+    {
+        return this.FreezeTime.IsTimeBubble(location);
+    }
+
     /// <summary>Get whether the time should be frozen at a given time of day based on the <see cref="ModFreezeTimeConfig.AnywhereAtTime"/> option.</summary>
     /// <param name="time">The time of day in 24-hour military format (e.g. 1600 for 8pm).</param>
     public bool ShouldFreeze(int time)

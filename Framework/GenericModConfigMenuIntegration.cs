@@ -201,6 +201,18 @@ internal static class GenericModConfigMenuIntegration
                     .Where(p => p != string.Empty)
             )
         );
+        api.AddTextOption(
+            manifest,
+            name: I18n.Config_FreezeTimeTimeBubbleNames_Name,
+            tooltip: I18n.Config_FreezeTimeTimeBubbleNames_Desc,
+            getValue: () => string.Join(", ", getConfig().FreezeTime.TimeBubbleLocationNames),
+            setValue: value => getConfig().FreezeTime.TimeBubbleLocationNames = new(
+                value
+                    .Split(",")
+                    .Select(p => p.Trim())
+                    .Where(p => p != string.Empty)
+            )
+        );
 
         // multiplayer
         api.AddSectionTitle(manifest, I18n.Config_Multiplayer);

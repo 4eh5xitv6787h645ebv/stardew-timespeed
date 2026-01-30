@@ -69,6 +69,8 @@
     "config.freeze-time-freeze-names.desc": "The names of specific locations in which to freeze time. Location names can be seen in-game using the Debug Mode mod. You can list multiple with commas.",
     "config.freeze-time-dont-freeze-names.name": "Don't freeze location names",
     "config.freeze-time-dont-freeze-names.desc": "The names of specific locations in which time shouldn't be frozen, regardless of the previous settings. Location names can be seen in-game using the Debug Mode mod. You can list multiple with commas.",
+    "config.freeze-time-time-bubble-names.name": "Time bubble location names",
+    "config.freeze-time-time-bubble-names.desc": "Locations where time flows normally (so game systems like monster spawning work), but the clock restores to its entry value when you leave. Time freezes naturally at 1:50am to prevent passing out. Only active when time would otherwise be frozen. You can list multiple with commas.",
 
     // multiplayer options
     "config.multiplayer": "Multiplayer",

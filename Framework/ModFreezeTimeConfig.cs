@@ -43,15 +43,30 @@ internal class ModFreezeTimeConfig
     /// <remarks>See remarks on <see cref="ByLocationName"/>.</remarks>
     public HashSet<string> ExceptLocationNames { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>Locations where time flows normally (so game systems like monster spawning work),
+    /// but the clock is restored when the player leaves. Only effective when time would otherwise be frozen.</summary>
+    /// <remarks>See remarks on <see cref="ByLocationName"/>.</remarks>
+    public HashSet<string> TimeBubbleLocationNames { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
 
     /*********
     ** Public methods
     *********/
+    /// <summary>Get whether the given location is a time bubble.</summary>
+    /// <param name="location">The location to check.</param>
+    public bool IsTimeBubble(GameLocation? location)
+    {
+        return location != null && this.TimeBubbleLocationNames.Contains(location.Name);
+    }
+
     /// <summary>Get whether time should be frozen in the given location.</summary>
     /// <param name="location">The location to check.</param>
     public bool ShouldFreeze(GameLocation? location)
     {
         if (location == null || this.ExceptLocationNames.Contains(location.Name))
+            return false;
+
+        if (this.TimeBubbleLocationNames.Contains(location.Name))
             return false;
 
         // by location name
@@ -97,5 +112,8 @@ internal class ModFreezeTimeConfig
 
         this.ExceptLocationNames = new HashSet<string>(this.ExceptLocationNames ?? [], StringComparer.OrdinalIgnoreCase);
         this.ExceptLocationNames.Remove(null!);
+
+        this.TimeBubbleLocationNames = new HashSet<string>(this.TimeBubbleLocationNames ?? [], StringComparer.OrdinalIgnoreCase);
+        this.TimeBubbleLocationNames.Remove(null!);
     }
 }

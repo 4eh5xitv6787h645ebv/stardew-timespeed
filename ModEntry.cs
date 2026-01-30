@@ -38,6 +38,7 @@ internal class ModEntry : Mod
     /// <summary>Whether time should be frozen.</summary>
     private bool IsTimeFrozen =>
         !this.InCutsceneUnfreeze
+        && !this.IsInActiveTimeBubble
         && (this.ManualFreeze
             || (this.AutoFreeze != AutoFreezeReason.None && !this.SuspendAutoFreezes.Contains(this.AutoFreeze)));
 
@@ -73,6 +74,21 @@ internal class ModEntry : Mod
 
     /// <summary>The saved Game1.gameTimeInterval when the cutscene chain started. Restored after the cutscene ends to prevent clock leakage.</summary>
     private int SavedGameTimeIntervalBeforeCutscene;
+
+    /// <summary>Whether the player is currently in a time bubble location.</summary>
+    private bool InTimeBubble;
+
+    /// <summary>Whether time was frozen when the player entered the current time bubble.</summary>
+    private bool TimeBubbleWasTimeFrozen;
+
+    /// <summary>The saved Game1.timeOfDay when the player entered the time bubble.</summary>
+    private int SavedTimeOfDayBeforeTimeBubble;
+
+    /// <summary>The saved Game1.gameTimeInterval when the player entered the time bubble.</summary>
+    private int SavedGameTimeIntervalBeforeTimeBubble;
+
+    /// <summary>Whether the player is in a time bubble that is actively suppressing time freeze.</summary>
+    private bool IsInActiveTimeBubble => this.InTimeBubble && this.TimeBubbleWasTimeFrozen;
 
     /// <summary>Whether time should be frozen this tick. Set in UpdateTicking, used in UpdateTicked.</summary>
     private bool FreezeTimeThisTick;
@@ -158,6 +174,12 @@ internal class ModEntry : Mod
         this.CutsceneHadEvent = false;
         this.SavedTimeOfDayBeforeCutscene = 0;
         this.SavedGameTimeIntervalBeforeCutscene = 0;
+
+        // reset time bubble state
+        this.InTimeBubble = false;
+        this.TimeBubbleWasTimeFrozen = false;
+        this.SavedTimeOfDayBeforeTimeBubble = 0;
+        this.SavedGameTimeIntervalBeforeTimeBubble = 0;
     }
 
     /// <inheritdoc cref="IMultiplayerEvents.ModMessageReceived"/>
@@ -225,6 +247,10 @@ internal class ModEntry : Mod
         if (!this.ShouldEnable())
             return;
 
+        // reset time bubble state for new day
+        this.InTimeBubble = false;
+        this.TimeBubbleWasTimeFrozen = false;
+
         this.UpdateScaleForDay(Game1.season, Game1.dayOfMonth);
         this.UpdateTimeFreeze(clearPreviousOverrides: true);
         this.UpdateSettingsForLocation(Game1.currentLocation);
@@ -252,6 +278,24 @@ internal class ModEntry : Mod
         if (!this.ShouldEnable() || !e.IsLocalPlayer)
             return;
 
+        // InTimeBubble may be false if the bubble was deactivated (pass-out prevention),
+        // but TimeBubbleWasTimeFrozen is still set — meaning we have a snapshot to restore.
+        bool wasInBubble = this.InTimeBubble || this.TimeBubbleWasTimeFrozen;
+        bool newIsBubble = this.Config.IsTimeBubble(e.NewLocation);
+
+        if (wasInBubble && !newIsBubble)
+        {
+            // leaving bubble (or deactivated bubble) → restore clock
+            this.ExitTimeBubble();
+        }
+        else if (!wasInBubble && newIsBubble)
+        {
+            // entering bubble → snapshot clock BEFORE UpdateSettingsForLocation
+            // (IsTimeFrozen still reflects the old location's freeze state here)
+            this.EnterTimeBubble(e.NewLocation);
+        }
+        // else: bubble→bubble keeps original snapshot, non-bubble→non-bubble is normal
+
         this.UpdateSettingsForLocation(e.NewLocation);
     }
 
@@ -260,6 +304,12 @@ internal class ModEntry : Mod
     {
         if (!this.ShouldEnable())
             return;
+
+        // deactivate time bubble near pass-out so normal freeze takes over
+        if (this.IsInActiveTimeBubble && e.NewTime >= 2550)
+        {
+            this.DeactivateTimeBubble();
+        }
 
         this.UpdateFreezeForTime();
     }
@@ -687,6 +737,43 @@ internal class ModEntry : Mod
             Game1.gameTimeInterval = this.SavedGameTimeIntervalBeforeCutscene;
             this.Monitor.Log($"Restored clock after cutscene: timeOfDay={Game1.timeOfDay}, interval={Game1.gameTimeInterval}.", LogLevel.Trace);
         }
+    }
+
+    /// <summary>Snapshot the clock and enter a time bubble.</summary>
+    /// <param name="location">The bubble location being entered.</param>
+    private void EnterTimeBubble(GameLocation location)
+    {
+        this.TimeBubbleWasTimeFrozen = this.IsTimeFrozen;
+        if (this.TimeBubbleWasTimeFrozen)
+        {
+            this.SavedTimeOfDayBeforeTimeBubble = Game1.timeOfDay;
+            this.SavedGameTimeIntervalBeforeTimeBubble = Game1.gameTimeInterval;
+        }
+        this.InTimeBubble = true;
+        this.Monitor.Log($"Entered time bubble '{location.Name}'. Time was {(this.TimeBubbleWasTimeFrozen ? "frozen" : "not frozen")}.", LogLevel.Trace);
+    }
+
+    /// <summary>Restore the clock and exit the time bubble.</summary>
+    private void ExitTimeBubble()
+    {
+        if (this.TimeBubbleWasTimeFrozen)
+        {
+            Game1.timeOfDay = this.SavedTimeOfDayBeforeTimeBubble;
+            Game1.gameTimeInterval = this.SavedGameTimeIntervalBeforeTimeBubble;
+            this.Monitor.Log($"Exited time bubble. Restored: timeOfDay={Game1.timeOfDay}, interval={Game1.gameTimeInterval}.", LogLevel.Trace);
+        }
+        this.InTimeBubble = false;
+        this.TimeBubbleWasTimeFrozen = false;
+        this.SavedTimeOfDayBeforeTimeBubble = 0;
+        this.SavedGameTimeIntervalBeforeTimeBubble = 0;
+    }
+
+    /// <summary>Deactivate the time bubble near pass-out so normal freeze mechanisms take over.
+    /// The saved snapshot is preserved so <see cref="ExitTimeBubble"/> can still restore the clock when the player leaves.</summary>
+    private void DeactivateTimeBubble()
+    {
+        this.Monitor.Log($"Time bubble deactivated (approaching pass-out at {Game1.timeOfDay}). Time will freeze until player leaves.", LogLevel.Trace);
+        this.InTimeBubble = false;
     }
 
     /// <summary>Send a multiplayer message to the host player.</summary>
