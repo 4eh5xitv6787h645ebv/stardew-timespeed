@@ -100,15 +100,19 @@ namespace Omegasis.TimeFreeze
         /// </remarks>
         private bool IsCutscenePlaying()
         {
+            // Festivals allow free movement between locations (e.g., the Desert
+            // Festival lets you enter Skull Cavern), so they are NOT cutscenes.
+            // Time freeze during festivals is handled by normal location-based config.
+            // This check must come before eventUp/CurrentEvent because festivals
+            // set both of those flags.
+            if (Game1.isFestival())
+                return false;
+
             // Standard event/cutscene detection - catches ALL mod events (SVE, RSV, East Scarp, etc.)
             if (Game1.eventUp)
                 return true;
 
             if (Game1.CurrentEvent != null)
-                return true;
-
-            // Festival detection
-            if (Game1.isFestival())
                 return true;
 
             // Mini-game detection (fishing game, arcade games, Junimo Kart, etc.)
@@ -291,13 +295,31 @@ namespace Omegasis.TimeFreeze
         private bool ShouldFreezeTime(Farmer player, GameLocation location)
         {
             if (Game1.showingEndOfNightStuff) return false;
+
+            // Skull Cavern mine levels (MineShaft with level >= 121) should use
+            // the "SkullCave" config, not "UndergroundMine". This ensures that
+            // setting "SkullCave" to true covers ALL of Skull Cavern, not just
+            // the entrance room.
+            if (location is MineShaft shaft)
+            {
+                if (shaft.mineLevel >= 121 && this.Config.freezeTimeInThisLocation.ContainsKey("SkullCave"))
+                    return this.Config.freezeTimeInThisLocation["SkullCave"];
+                if (this.Config.freezeTimeInThisLocation.ContainsKey("UndergroundMine"))
+                    return this.Config.freezeTimeInThisLocation["UndergroundMine"];
+                return true;
+            }
+
+            // Skull Cavern entrance room
+            if (location.Name.Equals("SkullCave") || location.Name.StartsWith("SkullCave"))
+            {
+                if (this.Config.freezeTimeInThisLocation.ContainsKey("SkullCave"))
+                    return this.Config.freezeTimeInThisLocation["SkullCave"];
+                return true;
+            }
+
+            // Named location in config
             if (this.Config.freezeTimeInThisLocation.ContainsKey(location.Name))
             {
-                if (location.Name.Equals("SkullCave") || location.Name.StartsWith("SkullCave"))
-                {
-                    return this.Config.freezeTimeInThisLocation["SkullCave"];
-                }
-
                 if (player.swimming.Value)
                 {
                     if (this.Config.PassTimeWhileSwimmingInBathhouse && location is BathHousePool)
@@ -307,24 +329,16 @@ namespace Omegasis.TimeFreeze
                 return this.Config.freezeTimeInThisLocation[location.Name];
             }
 
+            // Underground mine fallback (regular mines levels 1-120)
             if (location.NameOrUniqueName.StartsWith("UndergroundMine"))
             {
-                return this.Config.freezeTimeInThisLocation["UndergroundMine"];
-            }
-
-            //Skull cave check.
-            if (location.Name.Equals("SkullCave") || location.Name.StartsWith("SkullCave"))
-            {
-                return this.Config.freezeTimeInThisLocation["SkullCave"];
-            }
-
-            //If for some reason the location wasn't accounted for then just freeze time there by default.
-            if (location.IsOutdoors)
-                return false;
-            else
-            {
+                if (this.Config.freezeTimeInThisLocation.ContainsKey("UndergroundMine"))
+                    return this.Config.freezeTimeInThisLocation["UndergroundMine"];
                 return true;
             }
+
+            // Default: freeze indoors, pass time outdoors
+            return !location.IsOutdoors;
         }
     }
 }
